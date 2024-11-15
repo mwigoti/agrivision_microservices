@@ -42,7 +42,7 @@ Steps
 
     Clone the Repository
 
-git clone https://github.com/yourusername/agrivision_microservices.git
+git clone https://github.com/mwigoti/agrivision_microservices.git
 cd agrivision_microservices
 
 Set Up a Virtual Environment
