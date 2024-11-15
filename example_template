@@ -1,0 +1,404 @@
+# settings.py
+import os
+
+AUTH_PASSWORD_VALIDATORS = [
+    {
+        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
+        'OPTIONS': {
+            'min_length': 8,
+        }
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
+    },
+]
+
+LOGIN_REDIRECT_URL = 'home'
+LOGOUT_REDIRECT_URL = 'login'
+AUTH_USER_MODEL = 'accounts.CustomUser'
+
+# Email settings (configure according to your email provider)
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = 'your@email.com'
+EMAIL_HOST_PASSWORD = 'your-app-password'
+
+# models.py
+from django.contrib.auth.models import AbstractUser
+from django.db import models
+from django.utils.translation import gettext_lazy as _
+from django.utils.crypto import get_random_string
+
+class CustomUser(AbstractUser):
+    email = models.EmailField(_('email address'), unique=True)
+    is_email_verified = models.BooleanField(default=False)
+    verification_token = models.CharField(max_length=100, blank=True)
+    
+    def save(self, *args, **kwargs):
+        if not self.verification_token:
+            self.verification_token = get_random_string(64)
+        super().save(*args, **kwargs)
+
+# forms.py
+from django import forms
+from django.contrib.auth.forms import UserCreationForm, PasswordResetForm
+from .models import CustomUser
+
+class CustomUserCreationForm(UserCreationForm):
+    email = forms.EmailField(required=True)
+    
+    class Meta:
+        model = CustomUser
+        fields = ('username', 'email', 'password1', 'password2')
+
+class CustomPasswordResetForm(PasswordResetForm):
+    def clean_email(self):
+        email = self.cleaned_data['email']
+        if not CustomUser.objects.filter(email=email).exists():
+            raise forms.ValidationError("There is no user with this email address.")
+        return email
+
+# views.py
+from django.shortcuts import render, redirect
+from django.contrib.auth import login, authenticate
+from django.contrib.auth.decorators import login_required
+from django.core.mail import send_mail
+from django.template.loader import render_to_string
+from django.utils.html import strip_tags
+from django.contrib import messages
+from django.conf import settings
+from .forms import CustomUserCreationForm, CustomPasswordResetForm
+from .models import CustomUser
+
+def signup(request):
+    if request.method == 'POST':
+        form = CustomUserCreationForm(request.POST)
+        if form.is_valid():
+            user = form.save()
+            # Send verification email
+            subject = 'Verify your email address'
+            html_message = render_to_string('registration/verification_email.html', {
+                'user': user,
+                'token': user.verification_token,
+                'domain': request.get_host(),
+            })
+            plain_message = strip_tags(html_message)
+            
+            send_mail(
+                subject,
+                plain_message,
+                settings.EMAIL_HOST_USER,
+                [user.email],
+                html_message=html_message,
+            )
+            
+            messages.success(request, 'Please check your email to verify your account.')
+            return redirect('login')
+    else:
+        form = CustomUserCreationForm()
+    return render(request, 'registration/signup.html', {'form': form})
+
+def verify_email(request, token):
+    try:
+        user = CustomUser.objects.get(verification_token=token)
+        user.is_email_verified = True
+        user.verification_token = ''
+        user.save()
+        messages.success(request, 'Your email has been verified. You can now login.')
+    except CustomUser.DoesNotExist:
+        messages.error(request, 'Invalid verification link.')
+    return redirect('login')
+
+@login_required
+def home(request):
+    return render(request, 'home.html')
+
+# urls.py
+from django.urls import path, include
+from django.contrib.auth import views as auth_views
+from . import views
+
+urlpatterns = [
+    path('', views.home, name='home'),
+    path('accounts/signup/', views.signup, name='signup'),
+    path('accounts/verify/<str:token>/', views.verify_email, name='verify_email'),
+    path('accounts/login/', auth_views.LoginView.as_view(), name='login'),
+    path('accounts/logout/', auth_views.LogoutView.as_view(), name='logout'),
+    path('accounts/password_reset/', auth_views.PasswordResetView.as_view(), name='password_reset'),
+    path('accounts/password_reset/done/', 
+         auth_views.PasswordResetDoneView.as_view(), 
+         name='password_reset_done'),
+    path('accounts/reset/<uidb64>/<token>/',
+         auth_views.PasswordResetConfirmView.as_view(),
+         name='password_reset_confirm'),
+    path('accounts/reset/done/',
+         auth_views.PasswordResetCompleteView.as_view(),
+         name='password_reset_complete'),
+]
+
+# templates/base.html
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{% block title %}Authentication System{% endblock %}</title>
+    <style>
+        :root {
+            --primary-color: #4A90E2;
+            --secondary-color: #2C3E50;
+            --background-color: #F5F6FA;
+            --error-color: #E74C3C;
+            --success-color: #2ECC71;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--background-color);
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 400px;
+            margin: 2rem auto;
+            padding: 2rem;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .form-group {
+            margin-bottom: 1rem;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: var(--secondary-color);
+        }
+
+        input[type="text"],
+        input[type="email"],
+        input[type="password"] {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 1rem;
+        }
+
+        button {
+            background-color: var(--primary-color);
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 1rem;
+            width: 100%;
+            transition: background-color 0.3s ease;
+        }
+
+        button:hover {
+            background-color: #357ABD;
+        }
+
+        .messages {
+            list-style: none;
+            padding: 0;
+            margin-bottom: 1rem;
+        }
+
+        .message {
+            padding: 1rem;
+            margin-bottom: 0.5rem;
+            border-radius: 4px;
+        }
+
+        .message.success {
+            background-color: var(--success-color);
+            color: white;
+        }
+
+        .message.error {
+            background-color: var(--error-color);
+            color: white;
+        }
+
+        .help-text {
+            font-size: 0.875rem;
+            color: #666;
+            margin-top: 0.25rem;
+        }
+
+        .form-links {
+            text-align: center;
+            margin-top: 1rem;
+        }
+
+        .form-links a {
+            color: var(--primary-color);
+            text-decoration: none;
+        }
+
+        .form-links a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        {% if messages %}
+        <ul class="messages">
+            {% for message in messages %}
+            <li class="message {{ message.tags }}">{{ message }}</li>
+            {% endfor %}
+        </ul>
+        {% endif %}
+        
+        {% block content %}
+        {% endblock %}
+    </div>
+</body>
+</html>
+
+# templates/registration/login.html
+{% extends 'base.html' %}
+
+{% block title %}Login{% endblock %}
+
+{% block content %}
+<h2 style="text-align: center; color: var(--secondary-color);">Login</h2>
+<form method="post">
+    {% csrf_token %}
+    {% for field in form %}
+    <div class="form-group">
+        {{ field.label_tag }}
+        {{ field }}
+        {% if field.help_text %}
+        <div class="help-text">{{ field.help_text }}</div>
+        {% endif %}
+        {% for error in field.errors %}
+        <div class="message error">{{ error }}</div>
+        {% endfor %}
+    </div>
+    {% endfor %}
+    <button type="submit">Login</button>
+</form>
+<div class="form-links">
+    <p>Don't have an account? <a href="{% url 'signup' %}">Sign up</a></p>
+    <p><a href="{% url 'password_reset' %}">Forgot password?</a></p>
+</div>
+{% endblock %}
+
+# templates/registration/signup.html
+{% extends 'base.html' %}
+
+{% block title %}Sign Up{% endblock %}
+
+{% block content %}
+<h2 style="text-align: center; color: var(--secondary-color);">Sign Up</h2>
+<form method="post">
+    {% csrf_token %}
+    {% for field in form %}
+    <div class="form-group">
+        {{ field.label_tag }}
+        {{ field }}
+        {% if field.help_text %}
+        <div class="help-text">{{ field.help_text }}</div>
+        {% endif %}
+        {% for error in field.errors %}
+        <div class="message error">{{ error }}</div>
+        {% endfor %}
+    </div>
+    {% endfor %}
+    <button type="submit">Sign Up</button>
+</form>
+<div class="form-links">
+    <p>Already have an account? <a href="{% url 'login' %}">Login</a></p>
+</div>
+{% endblock %}
+
+# templates/registration/password_reset_form.html
+{% extends 'base.html' %}
+
+{% block title %}Reset Password{% endblock %}
+
+{% block content %}
+<h2 style="text-align: center; color: var(--secondary-color);">Reset Password</h2>
+<p style="text-align: center; margin-bottom: 2rem;">Enter your email address below, and we'll send you instructions for setting a new password.</p>
+<form method="post">
+    {% csrf_token %}
+    {% for field in form %}
+    <div class="form-group">
+        {{ field.label_tag }}
+        {{ field }}
+        {% if field.help_text %}
+        <div class="help-text">{{ field.help_text }}</div>
+        {% endif %}
+        {% for error in field.errors %}
+        <div class="message error">{{ error }}</div>
+        {% endfor %}
+    </div>
+    {% endfor %}
+    <button type="submit">Send Reset Link</button>
+</form>
+<div class="form-links">
+    <p><a href="{% url 'login' %}">Back to Login</a></p>
+</div>
+{% endblock %}
+
+# templates/registration/verification_email.html
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .button {
+            display: inline-block;
+            padding: 10px 20px;
+            background-color: #4A90E2;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Verify Your Email Address</h2>
+        <p>Hi {{ user.username }},</p>
+        <p>Thank you for signing up! Please click the button below to verify your email address:</p>
+        <p>
+            <a href="http://{{ domain }}{% url 'verify_email' token=token %}" class="button">
+                Verify Email
+            </a>
+        </p>
+        <p>If the button doesn't work, copy and paste this link into your browser:</p>
+        <p>http://{{ domain }}{% url 'verify_email' token=token %}</p>
+        <p>This link will expire in 24 hours.</p>
+        <p>If you didn't sign up for an account, you can safely ignore this email.</p>
+    </div>
+</body>
+</html>
