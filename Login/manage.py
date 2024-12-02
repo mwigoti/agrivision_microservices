@@ -2,7 +2,7 @@
 """Django's command-line utility for administrative tasks."""
 import os
 import sys
-
+from django.core.mail import send_mail
 
 def main():
     """Run administrative tasks."""
@@ -20,3 +20,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+
+
